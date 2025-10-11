@@ -5,7 +5,7 @@ from typing import Optional
 def generate_random_suffix(length: int = 6) -> str:
     return uuid.uuid4().hex[:length]
 
-async def generate_unique_slug(
+async def generate_unique(
     model,
     field: str = "slug",
     text: Optional[str] = None,
