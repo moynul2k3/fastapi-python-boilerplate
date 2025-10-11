@@ -1,26 +1,25 @@
+# app/main.py
 import os
-from fastapi import FastAPI, HTTPException, UploadFile, Form
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from tortoise.contrib.fastapi import register_tortoise
-from .routes import create_sub_app
+from app.routes import create_sub_app
 import importlib
-from .utils import sync_permissions
-from .config import settings, init_db
 from pathlib import Path
-from fastapi.staticfiles import StaticFiles
+from app.utils.sync_permissions import sync_permissions
+from app.config import settings, init_db
+from applications.user.models import User
+from app.redis import init_redis, redis_client
+from app.utils.auto_routing import get_module
 
-
-
-
+# --- Lifespan ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await sync_permissions()
     await init_db()
-
-    # Second: create default superuser
-    from applications.user.models import User
+    init_redis()
     admin_user = await User.filter(username="admin").first()
     if not admin_user:
         await User.create(
@@ -35,17 +34,27 @@ async def lifespan(app: FastAPI):
     else:
         print("ℹ️ Default superuser already exists.")
 
-    # Let FastAPI run
     yield
-
-    # Optional: shutdown tasks here
+    if redis_client:
+        await redis_client.aclose()
     print("Application shutdown complete.")
 
-
+# --- FastAPI app ---
 app = FastAPI(lifespan=lifespan, debug=settings.DEBUG)
 
-apps = ["user", "item", "auth"]
+# --- Auto-mount routes ---
+apps = get_module(base_dir='applications')
+routes = get_module(base_dir='routes')
 
+for route_name in routes:
+    try:
+        routes_module = importlib.import_module(f"routes.{route_name}.routes")
+        sub_app = create_sub_app(route_name, routes_module.router)
+        app.mount(f"/{route_name}", sub_app)
+    except ModuleNotFoundError as e:
+        print(f"⚠️ Warning: Could not find routes for '{route_name}'. Skipping. Error: {e}")
+
+# --- Register Tortoise ORM models ---
 def get_model_modules(apps):
     modules = []
     for app_name in apps:
@@ -53,7 +62,6 @@ def get_model_modules(apps):
         if module_path.exists():
             modules.append(f"applications.{app_name}.models")
     return modules
-
 
 register_tortoise(
     app,
@@ -63,29 +71,17 @@ register_tortoise(
     add_exception_handlers=True,
 )
 
-
-for app_name in apps:
-    routes_module = importlib.import_module(f"applications.{app_name}.routes")
-    sub_app = create_sub_app(app_name, routes_module.router)
-    app.mount(f"/{app_name}", sub_app)
-    
-    
-ALLOWED_HOST = [
-    "http://localhost:3000",   
-    "http://127.0.0.1:3000",
-]
+# --- CORS ---
+ALLOWED_HOST = ["http://localhost:3000", "http://127.0.0.1:3000"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_HOST,    
+    allow_origins=ALLOWED_HOST,
     allow_credentials=True,
-    allow_methods=["*"],     
-    allow_headers=["*"],     
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-
-# Ensure 'media' folder exists
+# --- Media ---
 MEDIA_DIR = "media"
 os.makedirs(MEDIA_DIR, exist_ok=True)
-
-# Mount static media files
 app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")

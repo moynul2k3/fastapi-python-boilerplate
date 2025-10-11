@@ -1,6 +1,7 @@
 from tortoise import fields
 from tortoise.models import Model
 from passlib.hash import bcrypt
+from app.utils.generate_unique import generate_unique_slug
 
 
 class Permission(Model):
@@ -50,21 +51,21 @@ class User(Model):
 
         await self.prefetch_related("user_permissions", "groups__permissions")
 
-        for perm in self.user_permissions and self.is_staff:
-            if perm.codename == codename:
-                return True
-
-        for group in self.groups and self.is_staff:
-            for perm in group.permissions:
+        if self.is_staff:
+            for perm in self.user_permissions:
                 if perm.codename == codename:
                     return True
 
+            for group in self.groups:
+                for perm in group.permissions:
+                    if perm.codename == codename:
+                        return True
         return False
 
     
 
     @classmethod
-    def hash_password(cls, password: str) -> str:
+    def set_password(cls, password: str) -> str:
         return bcrypt.hash(password)
 
     def verify_password(self, password: str) -> bool:
@@ -79,9 +80,16 @@ class User(Model):
         return f"{self.username} ({self.email})"
     
     async def save(self, *args, **kwargs):
-        from app.utils import generate_unique
+        if self.password and not self.password.startswith("$2b$"):
+            self.password = self.set_password(self.password)
         if not self.username:
-            self.username = await generate_unique(self.email or self.phone or "user", User)
+            base_text = self.email or self.phone or "user"
+            self.username = await generate_unique_slug(
+                model=User,
+                field="username",
+                text=base_text,
+                max_length=20
+            )
         await super().save(*args, **kwargs)
 
 

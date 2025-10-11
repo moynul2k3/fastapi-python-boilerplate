@@ -372,7 +372,7 @@ from tortoise.contrib.pydantic import pydantic_model_creator
 from datetime import datetime, timezone
 import os
 
-from .models import Category, SubCategory, Banner, Product, ProductImage
+from applications.item.models import Category, SubCategory, Banner, Product, ProductImage
 
 router = APIRouter()
 
