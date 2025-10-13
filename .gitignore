@@ -1,7 +1,5 @@
 # VSCode settings
-.vscode/
 media/
-.env
 
 
 # Virtual environment
@@ -17,9 +15,7 @@ migrations/
 migration/models/
 
 # Environment files
-.env
 .env/
-.env.local
 
 # Build and packaging
 *.pyc
@@ -50,3 +46,5 @@ Thumbs.db
 # Optional: if you use Aerich
 aerich.ini
 aerich/
+config.bat
+node_modules
