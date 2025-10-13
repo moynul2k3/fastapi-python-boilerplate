@@ -26,6 +26,15 @@ migration/models/
 *.pyo
 *.pyd
 *.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.egg-info/
+dist/
+build/
+
+
+
 
 # Logs
 *.log
