@@ -366,149 +366,240 @@
 
 
 
-from fastapi import APIRouter, HTTPException, Form, UploadFile, File, Request
+from fastapi import APIRouter, HTTPException, Form, UploadFile, File, Request, Depends
 from typing import List, Optional
 from tortoise.contrib.pydantic import pydantic_model_creator
-from datetime import datetime, timezone
-import os
+from app.utils.save_file import save_file
+from app.auth import *
 
 from applications.item.models import Category, SubCategory, Banner, Product, ProductImage
-
+from fastapi import HTTPException, status
+from tortoise.transactions import in_transaction
 router = APIRouter()
 
-# ==============================
-# File Upload Helper
-# ==============================
-UPLOAD_DIR = "uploads"
+Category_Pydantic = pydantic_model_creator(Category, name="Category")
 
-async def save_file(file: UploadFile, folder: str) -> str:
-    """Save uploaded file to folder inside UPLOAD_DIR and return path."""
-    folder_path = os.path.join(UPLOAD_DIR, folder)
-    os.makedirs(folder_path, exist_ok=True)  # Ensure folder exists
-
-    # Unique filename
-    filename = f"{datetime.now(timezone.utc).timestamp()}_{file.filename}"
-    file_path = os.path.join(folder_path, filename)
-
-    # Write file
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
-
-    return file_path
 
 # ==============================
 # CATEGORY
 # ==============================
-Category_Pydantic = pydantic_model_creator(Category, name="Category")
-
-@router.post("/categories", response_model=Category_Pydantic, tags=["Categories"])
+@router.post("/categories", response_model=Category_Pydantic, status_code=status.HTTP_201_CREATED, dependencies=[Depends(permission_required("add_category"))])
 async def create_category(
+    request: Request,
     name: str = Form(...),
     description: Optional[str] = Form(None),
-    image: UploadFile = File(...),
+    image: UploadFile = File(...)
 ):
-    image_path = await save_file(image, "categories")
-    obj = await Category.create(name=name, description=description, image=image_path)
-    return await Category_Pydantic.from_tortoise_orm(obj)
+    try:
+        # Save image safely
+        image_url = await save_file(request, image, "categories", quality=20)
 
-@router.put("/categories/{id}", response_model=Category_Pydantic, tags=["Categories"])
+        async with in_transaction():
+            category = await Category.create(
+                name=name.strip(),
+                description=description or "",
+                image=image_url
+            )
+
+        return await Category_Pydantic.from_tortoise_orm(category)
+
+    except HTTPException:
+        raise  # propagate 400 Bad Request
+    except Exception:
+        raise HTTPException(status_code=500, detail="Internal server error")
+    
+
+# ✅ Update Category
+@router.put("/categories/{id}", response_model=Category_Pydantic, dependencies=[Depends(permission_required("update_category"))])
 async def update_category(
     id: int,
+    request: Request,
     name: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None),
 ):
-    update_data = {k: v for k, v in {"name": name, "description": description}.items() if v is not None}
-    if image:
-        update_data["image"] = await save_file(image, "categories")
-    await Category.filter(id=id).update(**update_data)
-    return await Category_Pydantic.from_queryset_single(Category.get(id=id))
-
-@router.get("/categories", response_model=List[Category_Pydantic], tags=["Categories"])
-async def list_categories():
-    return await Category_Pydantic.from_queryset(Category.all())
-
-@router.get("/categories/{id}", response_model=Category_Pydantic, tags=["Categories"])
-async def get_category(id: int):
-    return await Category_Pydantic.from_queryset_single(Category.get(id=id))
-
-@router.delete("/categories/{id}", tags=["Categories"])
-async def delete_category(id: int):
-    deleted = await Category.filter(id=id).delete()
-    if not deleted:
+    category = await Category.get_or_none(id=id)
+    if not category:
         raise HTTPException(status_code=404, detail="Category not found")
-    return {"message": "Category deleted successfully"}
+
+    try:
+        update_data = {}
+        if name is not None:
+            update_data["name"] = name.strip()
+        if description is not None:
+            update_data["description"] = description
+        if image:
+            # Save new image
+            image_url = await save_file(request, image, "categories")
+            update_data["image"] = image_url
+
+        async with in_transaction():
+            await Category.filter(id=id).update(**update_data)
+
+        updated = await Category.get(id=id)
+        return await Category_Pydantic.from_tortoise_orm(updated)
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to update category")
+
+
+# ✅ List Categories
+@router.get("/categories", response_model=List[Category_Pydantic])
+async def list_categories(offset: int = 0, limit: int = 50):
+    try:
+        query = Category.all().offset(offset).limit(limit)
+        return await Category_Pydantic.from_queryset(query)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to fetch categories")
+
+
+# ✅ Get Single Category
+@router.get("/categories/{id}", response_model=Category_Pydantic)
+async def get_category(id: int):
+    category = await Category.get_or_none(id=id)
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+    return await Category_Pydantic.from_tortoise_orm(category)
+
+
+# ✅ Delete Category
+@router.delete("/categories/{id}", status_code=status.HTTP_200_OK, dependencies=[Depends(permission_required("delete_category"))])
+async def delete_category(id: int):
+    try:
+        deleted = await Category.filter(id=id).delete()
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Category not found")
+        return {"message": "Category deleted successfully"}
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to delete category")
+
+
+
+
 
 # ==============================
-# SUBCATEGORY
+# SUB CATEGORY
 # ==============================
 SubCategory_Pydantic = pydantic_model_creator(SubCategory, name="SubCategory")
 
-@router.post("/subcategories", response_model=SubCategory_Pydantic, tags=["SubCategories"])
+@router.post("/subcategories", response_model=SubCategory_Pydantic, status_code=status.HTTP_201_CREATED, dependencies=[Depends(permission_required("add_subcategory"))])
 async def create_subcategory(
-    name: str = Form(...),
+    request: Request,
     category_id: int = Form(...),
+    name: str = Form(...),
     description: Optional[str] = Form(None),
-    banner: Optional[UploadFile] = File(None),
-    image: Optional[UploadFile] = File(None),
-    popular: Optional[bool] = Form(False),
+    banner: UploadFile = File(...),
+    image: UploadFile = File(...),
+    popular: bool = Form(False)
 ):
-    obj_data = {
-        "name": name,
-        "category_id": category_id,
-        "description": description,
-        "popular": popular
-    }
+    category = await Category.get_or_none(id=category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
 
-    if banner:
-        obj_data["banner"] = await save_file(banner, "subcategories")
-    if image:
-        obj_data["image"] = await save_file(image, "subcategories")
+    try:
+        banner_url = await save_file(request, banner, "subcategories/banners", quality=20)
+        image_url = await save_file(request, image, "subcategories/images", quality=20)
 
-    obj = await SubCategory.create(**obj_data)
-    return await SubCategory_Pydantic.from_tortoise_orm(obj)
+        async with in_transaction():
+            subcategory = await SubCategory.create(
+                category=category,
+                name=name.strip(),
+                description=description or "",
+                banner=banner_url,
+                image=image_url,
+                popular=popular
+            )
+
+        return await SubCategory_Pydantic.from_tortoise_orm(subcategory)
+
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
-
-@router.put("/subcategories/{id}", response_model=SubCategory_Pydantic, tags=["SubCategories"])
+# ✅ Update SubCategory
+@router.put("/subcategories/{id}", response_model=SubCategory_Pydantic, dependencies=[Depends(permission_required("update_subcategory"))])
 async def update_subcategory(
     id: int,
-    name: Optional[str] = Form(None),
+    request: Request,
     category_id: Optional[int] = Form(None),
+    name: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
     banner: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),
-    popular: Optional[bool] = Form(None),
+    popular: Optional[bool] = Form(None)
 ):
-    update_data = {k: v for k, v in {
-        "name": name,
-        "category_id": category_id,
-        "description": description,
-        "popular": popular
-    }.items() if v is not None}
+    subcategory = await SubCategory.get_or_none(id=id)
+    if not subcategory:
+        raise HTTPException(status_code=404, detail="Subcategory not found")
 
-    if banner:
-        update_data["banner"] = await save_file(banner, "subcategories")
-    if image:
-        update_data["image"] = await save_file(image, "subcategories")
+    try:
+        update_data = {}
+        if category_id is not None:
+            category = await Category.get_or_none(id=category_id)
+            if not category:
+                raise HTTPException(status_code=404, detail="Category not found")
+            update_data["category"] = category
+        if name is not None:
+            update_data["name"] = name.strip()
+        if description is not None:
+            update_data["description"] = description
+        if popular is not None:
+            update_data["popular"] = popular
+        if banner:
+            banner_url = await save_file(request, banner, "subcategories/banners")
+            update_data["banner"] = banner_url
+        if image:
+            image_url = await save_file(request, image, "subcategories/images")
+            update_data["image"] = image_url
 
-    await SubCategory.filter(id=id).update(**update_data)
-    return await SubCategory_Pydantic.from_queryset_single(SubCategory.get(id=id))
+        async with in_transaction():
+            await SubCategory.filter(id=id).update(**update_data)
 
-@router.get("/subcategories", response_model=List[SubCategory_Pydantic], tags=["SubCategories"])
-async def list_subcategories():
-    return await SubCategory_Pydantic.from_queryset(SubCategory.all())
+        updated = await SubCategory.get(id=id)
+        return await SubCategory_Pydantic.from_tortoise_orm(updated)
 
-@router.get("/subcategories/{id}", response_model=SubCategory_Pydantic, tags=["SubCategories"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to update subcategory")
+
+
+# ✅ List SubCategories
+@router.get("/subcategories", response_model=List[SubCategory_Pydantic])
+async def list_subcategories(offset: int = 0, limit: int = 50):
+    try:
+        query = SubCategory.all().offset(offset).limit(limit)
+        return await SubCategory_Pydantic.from_queryset(query)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to fetch subcategories")
+
+
+# ✅ Get Single SubCategory
+@router.get("/subcategories/{id}", response_model=SubCategory_Pydantic)
 async def get_subcategory(id: int):
-    return await SubCategory_Pydantic.from_queryset_single(SubCategory.get(id=id))
+    subcategory = await SubCategory.get_or_none(id=id)
+    if not subcategory:
+        raise HTTPException(status_code=404, detail="Subcategory not found")
+    return await SubCategory_Pydantic.from_tortoise_orm(subcategory)
 
-@router.delete("/subcategories/{id}", tags=["SubCategories"])
+
+# ✅ Delete SubCategory
+@router.delete("/subcategories/{id}", status_code=status.HTTP_200_OK, dependencies=[Depends(permission_required("delete_subcategory"))])
 async def delete_subcategory(id: int):
-    deleted = await SubCategory.filter(id=id).delete()
-    if not deleted:
-        raise HTTPException(status_code=404, detail="SubCategory not found")
-    return {"message": "SubCategory deleted successfully"}
+    try:
+        deleted = await SubCategory.filter(id=id).delete()
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Subcategory not found")
+        return {"message": "Subcategory deleted successfully"}
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to delete subcategory")
+
+
+
 
 # ==============================
 # BANNER

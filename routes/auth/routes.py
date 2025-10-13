@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Form, Request
 from pydantic import BaseModel
 from pydantic import EmailStr
-# from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm
 from passlib.context import CryptContext
 from applications.user.models import User
 from app.token import get_current_user, create_access_token, create_refresh_token, SECRET_KEY, ALGORITHM, REFRESH_SECRET_KEY
@@ -47,9 +47,10 @@ class TokenResponse(BaseModel):
     refresh_token: str
     token_type: str
 
+
 @router.post("/login_auth2/", response_model=TokenResponse)
-async def login_auth2(form_data: OAuth2EmailPasswordForm = Depends()):
-    user = await User.get_or_none(email=form_data.email)
+async def login_auth2(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = await User.get_or_none(email=form_data.username)  # <- use username as email
     if not user or not pwd_context.verify(form_data.password, user.password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -285,12 +286,12 @@ async def send_otp(
 
 @router.post("/verify_otp/")
 async def verify_otp_route(
-    request: Request,
     user_key: str = Form(...),
     otpValue: str = Form(...),
+    purpose: str = Form(...),
 ):
     try:
-        await verify_otp(user_key, otpValue)
+        await verify_otp(user_key, otpValue, purpose)
     except HTTPException as e:
         raise e
     except Exception as e:

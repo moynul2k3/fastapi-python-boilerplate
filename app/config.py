@@ -1,10 +1,13 @@
 from typing import Optional
 from pydantic_settings import BaseSettings
 from tortoise import Tortoise
+from app.utils.auto_routing import get_module
+from pathlib import Path
 import os
 
 class Settings(BaseSettings):
     DEBUG: bool = True
+    MEDIA_DIR: str = "media"
     ENV: str = "development"
     DATABASE_URL: str
     SECRET_KEY: Optional[str]
@@ -16,18 +19,26 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+apps = get_module(base_dir='applications')
+def get_model_modules(apps):
+    modules = []
+    for app_name in apps:
+        module_path = Path(f"applications/{app_name}/models.py")
+        if module_path.exists():
+            modules.append(f"applications.{app_name}.models")
+    return modules
 
 
 TORTOISE_ORM = {
     "connections": {"default": settings.DATABASE_URL},
     "apps": {
         "models": {
-            "models": ["applications.user.models", "aerich.models"],
+            "models": get_model_modules(apps) + ["aerich.models"],
             "default_connection": "default",
         },
     },
     "use_tz": True,
-    "timezone": "UTC",
+    "timezone": "Asia/Dhaka",
 }
 
 async def init_db():

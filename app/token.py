@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Form, Request, FastAPI, Header, Cookie
 from fastapi.security import OAuth2PasswordBearer
-from fastapi.responses import JSONResponse
 from jose import jwt, JWTError, ExpiredSignatureError
 from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
@@ -21,7 +20,6 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login_auth2")
 
-router = APIRouter()
 
 
 # =========================
